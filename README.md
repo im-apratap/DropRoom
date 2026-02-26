@@ -2,6 +2,12 @@
 
 A sleek, minimalistic, and completely anonymous clipboard application built with React, Vite, and Supabase.
 
+<br/>
+<p align="center">
+  <img src="https://drive.google.com/uc?export=view&id=17OX3H0Q3ilYk6iltqCd5enSmz-GHc1Jg" alt="DropRoom Screenshot" width="800" />
+</p>
+<br/>
+
 ## Features
 
 - **Anonymous "Rooms"**: Instant generation of unique 6-character room codes. No signup required.
