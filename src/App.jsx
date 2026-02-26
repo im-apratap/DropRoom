@@ -14,6 +14,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import { Analytics } from "@vercel/analytics/react";
 import "./index.css";
 
 function generateRandomCode() {
@@ -581,6 +582,7 @@ function App() {
           to { transform: rotate(360deg); }
         }
       `}</style>
+      <Analytics />
     </>
   );
 }
