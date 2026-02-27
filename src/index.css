@@ -198,3 +198,150 @@ h6 {
 .animate-fade-in {
   animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Layout Classes */
+.header-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.content-container {
+  flex-grow: 1;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hero-section {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.hero-title {
+  font-size: 2.5rem;
+  font-weight: bold;
+}
+
+.hero-subtitle {
+  font-size: 1.5rem;
+  color: var(--text-main);
+  margin-top: 8px;
+}
+
+.text-area-input {
+  flex-grow: 1;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 24px;
+  padding-top: 32px;
+  color: var(--text-main);
+  font-size: 1rem;
+  font-family: monospace;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.bottom-action-bar {
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--action-bar-bg);
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.bottom-action-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.footer-wrapper {
+  text-align: right;
+  padding: 0 32px 16px 32px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 768px) {
+  body {
+    padding: 0;
+  }
+  #root {
+    gap: 0;
+  }
+  .main-container {
+    border-radius: 0;
+  }
+  .header-container {
+    padding: 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .header-actions {
+    justify-content: flex-start;
+  }
+  .content-container {
+    padding: 16px;
+  }
+  .hero-section {
+    margin-bottom: 16px;
+  }
+  .hero-title {
+    font-size: 1.75rem;
+  }
+  .hero-subtitle {
+    font-size: 1.125rem;
+  }
+  .text-area-input {
+    padding: 16px;
+    padding-top: 20px;
+  }
+  .bottom-action-bar {
+    padding: 12px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .bottom-action-group {
+    justify-content: space-between;
+  }
+  .footer-wrapper {
+    padding: 0 16px 16px 16px;
+    text-align: center;
+  }
+}
+
+@media screen and (max-width: 480px) {
+  .header-actions {
+    justify-content: center;
+    gap: 12px;
+  }
+  .room-badge {
+    width: 100%;
+    justify-content: center;
+    margin-right: 0 !important;
+  }
+  .btn-primary,
+  .btn-secondary {
+    flex: 1;
+    justify-content: center;
+  }
+}

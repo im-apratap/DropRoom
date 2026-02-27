@@ -191,15 +191,7 @@ function App() {
   return (
     <>
       <main className="main-container animate-fade-in">
-        <header
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            padding: "24px 32px",
-            borderBottom: "1px solid var(--border-color)",
-          }}
-        >
+        <header className="header-container">
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <div
               style={{
@@ -224,14 +216,7 @@ function App() {
             </h1>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              flexWrap: "wrap",
-            }}
-          >
+          <div className="header-actions">
             <div className="room-badge" style={{ marginRight: "8px" }}>
               <span style={{ color: "var(--text-muted)" }}>Room:</span>
               <span
@@ -330,28 +315,12 @@ function App() {
           </div>
         </header>
 
-        <div
-          style={{
-            flexGrow: 1,
-            padding: "32px",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ marginBottom: "24px", textAlign: "center" }}>
-            <h2 style={{ fontSize: "2.5rem", fontWeight: "bold" }}>
+        <div className="content-container">
+          <div className="hero-section">
+            <h2 className="hero-title">
               Hi there, <span className="primary-gradient-text">Welcome</span>
             </h2>
-            <h3
-              style={{
-                fontSize: "1.5rem",
-                color: "var(--text-main)",
-                marginTop: "8px",
-              }}
-            >
-              What would you like to paste?
-            </h3>
+            <h3 className="hero-subtitle">What would you like to paste?</h3>
           </div>
 
           <div
@@ -396,23 +365,10 @@ function App() {
             )}
 
             <textarea
+              className="text-area-input"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="Start typing or pasting your content here..."
-              style={{
-                flexGrow: 1,
-                width: "100%",
-                background: "transparent",
-                border: "none",
-                padding: "24px",
-                paddingTop: "32px",
-                color: "var(--text-main)",
-                fontSize: "1rem",
-                fontFamily: "monospace",
-                lineHeight: "1.6",
-                resize: "none",
-                outline: "none",
-              }}
             />
 
             {/* File Previews / Active Attachments */}
@@ -498,21 +454,8 @@ function App() {
             )}
 
             {/* Bottom Input Action Bar */}
-            <div
-              style={{
-                padding: "12px 24px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                background: "var(--action-bar-bg)",
-                borderBottomLeftRadius: "16px",
-                borderBottomRightRadius: "16px",
-                borderTop: "1px solid var(--border-color)",
-              }}
-            >
-              <div
-                style={{ display: "flex", alignItems: "center", gap: "16px" }}
-              >
+            <div className="bottom-action-bar">
+              <div className="bottom-action-group">
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -543,9 +486,7 @@ function App() {
                   <Paperclip size={16} /> Attach File (Max 5MB)
                 </button>
               </div>
-              <div
-                style={{ display: "flex", alignItems: "center", gap: "16px" }}
-              >
+              <div className="bottom-action-group">
                 <span
                   style={{
                     fontSize: "0.75rem",
@@ -560,14 +501,7 @@ function App() {
           </div>
         </div>
         {/* Footer */}
-        <div
-          style={{
-            textAlign: "right",
-            padding: "0 32px 16px 32px",
-            color: "var(--text-muted)",
-            fontSize: "0.875rem",
-          }}
-        >
+        <div className="footer-wrapper">
           Made by{" "}
           <span style={{ fontWeight: 600, color: "var(--text-main)" }}>
             Aaditya Pratap
