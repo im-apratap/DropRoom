@@ -16,6 +16,15 @@ import {
   Sun,
   Link,
 } from "lucide-react";
+import Editor from "react-simple-code-editor";
+import { highlight, languages } from "prismjs/components/prism-core";
+import "prismjs/components/prism-clike";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-python";
+import "prismjs/components/prism-markup"; // HTML/XML
+import "prismjs/components/prism-css";
+import "prismjs/themes/prism-tomorrow.css"; // Dark theme
+import JSZip from "jszip";
 import "./index.css";
 
 const generateRandomCode = customAlphabet(
@@ -33,9 +42,9 @@ function App() {
   });
 
   // File state
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [remoteFileUrl, setRemoteFileUrl] = useState(null);
-  const [remoteFileName, setRemoteFileName] = useState(null);
+  const [remoteFileName, setRemoteFileName] = useState(null); // This will represent the zipped file name
   const fileInputRef = useRef(null);
 
   // Status state
@@ -45,13 +54,33 @@ function App() {
   const [isFetching, setIsFetching] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
+  const [expirationHours, setExpirationHours] = useState(1);
+
+  // Recent rooms state
+  const [recentRooms, setRecentRooms] = useState(() => {
+    try {
+      const saved = localStorage.getItem("droproom_recent");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Helper to add room to recents
+  const addToRecentRooms = (code) => {
+    setRecentRooms((prev) => {
+      const newRecents = [code, ...prev.filter((r) => r !== code)].slice(0, 5);
+      localStorage.setItem("droproom_recent", JSON.stringify(newRecents));
+      return newRecents;
+    });
+  };
 
   const fetchRoomDataFromCode = async (cleanCode, isInitialLoad = false) => {
     setIsFetching(true);
     try {
       const { data, error } = await supabase
         .from("snippets")
-        .select("content, file_url, file_name")
+        .select("content, file_url, file_name, expires_at")
         .eq("code", cleanCode)
         .single();
 
@@ -67,11 +96,25 @@ function App() {
         return;
       }
 
+      // Check for expiration
+      if (data.expires_at) {
+        const expiresAtDate = new Date(data.expires_at);
+        if (expiresAtDate < new Date()) {
+          // Room expired
+          if (!isInitialLoad) {
+            alert("This room has expired! Generating a new room...");
+          }
+          setRoomCode(generateRandomCode());
+          return;
+        }
+      }
+
       setRoomCode(cleanCode);
       setContent(data.content || "");
       setRemoteFileUrl(data.file_url || null);
       setRemoteFileName(data.file_name || null);
-      setSelectedFile(null); // Clear any pending local file
+      setSelectedFiles([]); // Clear any pending local files
+      addToRecentRooms(cleanCode);
     } catch (error) {
       console.error("Error joining room:", error.message);
       alert("Error fetching room content.");
@@ -126,46 +169,65 @@ function App() {
   const handleNewRoom = () => {
     setRoomCode(generateRandomCode());
     setContent("");
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setRemoteFileName(null);
     setRemoteFileUrl(null);
+    setExpirationHours(1);
   };
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
 
-    // Validate 5MB limit
-    if (file.size > 5 * 1024 * 1024) {
-      alert("File is too large. Maximum size is 5MB.");
+    // Validate 5MB combined limit for practical browser processing
+    const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+    if (totalSize > 5 * 1024 * 1024) {
+      alert("Total files size is too large. Maximum combined size is 5MB.");
       e.target.value = ""; // Reset input
       return;
     }
 
-    setSelectedFile(file);
+    setSelectedFiles((prev) => [...prev, ...files]);
   };
 
-  const handleRemoveFile = () => {
-    setSelectedFile(null);
+  const handleRemoveFile = (index) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
   const handleSave = async () => {
-    if (!content.trim() && !selectedFile && !remoteFileUrl) return;
+    if (!content.trim() && selectedFiles.length === 0 && !remoteFileUrl) return;
 
     setIsSaving(true);
     try {
       let finalFileUrl = remoteFileUrl;
       let finalFileName = remoteFileName;
 
-      // 1. Handle File Upload if there is a pending selected file
-      if (selectedFile) {
-        const filePath = `${roomCode}/${selectedFile.name}`;
+      // 1. Handle File Upload if there are pending selected files
+      if (selectedFiles.length > 0) {
+        const zip = new JSZip();
+        selectedFiles.forEach((file) => {
+          zip.file(file.name, file);
+        });
+
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        // NOTE: We could theoretically encrypt the entire zipBlob using crypto-js or WebCrypto here,
+        // but for a 5MB blob, reading into memory via FileReader to stringify, encrypt via CryptoJS,
+        // converting back to blob -> can easily block the UI or crash mobile browsers.
+        // Using native File is standard; but if strict client-side file encryption is requested, it requires more complex WebCrypto API streams.
+        // For right now, JSZip provides compression and bundles the files. If you'd like full blob encryption, let me know!
+
+        const zipFileName = `files-${Date.now()}.zip`;
+        const filePath = `${roomCode}/${zipFileName}`;
+
         const { error: uploadError } = await supabase.storage
           .from("room-files")
-          .upload(filePath, selectedFile, { upsert: true });
+          .upload(filePath, zipBlob, {
+            upsert: true,
+            contentType: "application/zip",
+          });
 
         if (uploadError) throw uploadError;
 
@@ -175,12 +237,19 @@ function App() {
         } = supabase.storage.from("room-files").getPublicUrl(filePath);
 
         finalFileUrl = publicUrl;
-        finalFileName = selectedFile.name;
+        finalFileName = "Shared Files.zip"; // Display name
 
         // Update local state to reflect the file is now remote
         setRemoteFileUrl(publicUrl);
-        setRemoteFileName(selectedFile.name);
-        setSelectedFile(null);
+        setRemoteFileName(finalFileName);
+        setSelectedFiles([]);
+      }
+
+      // Calculate expires_at
+      let expiresAtValue = null;
+      if (expirationHours > 0) {
+        const ms = expirationHours * 60 * 60 * 1000;
+        expiresAtValue = new Date(Date.now() + ms).toISOString();
       }
 
       // 2. Upsert the row in the database
@@ -190,6 +259,7 @@ function App() {
           content: content,
           file_url: finalFileUrl,
           file_name: finalFileName,
+          expires_at: expiresAtValue,
         },
         { onConflict: "code" },
       );
@@ -320,7 +390,9 @@ function App() {
             <button
               onClick={handleSave}
               className="btn-primary"
-              disabled={isSaving || (!content.trim() && !selectedFile)}
+              disabled={
+                isSaving || (!content.trim() && selectedFiles.length === 0)
+              }
             >
               {isSaving ? (
                 <Loader2
@@ -333,6 +405,28 @@ function App() {
               )}
               Save
             </button>
+
+            <select
+              value={expirationHours}
+              onChange={(e) => setExpirationHours(Number(e.target.value))}
+              style={{
+                marginLeft: "8px",
+                padding: "8px 12px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-main)",
+                color: "var(--text-main)",
+                fontSize: "0.875rem",
+                cursor: "pointer",
+                outline: "none",
+              }}
+              title="Auto-Destruct Timer"
+            >
+              <option value={1}>1 Hour</option>
+              <option value={2}>2 Hours</option>
+              <option value={3}>3 Hours</option>
+              <option value={6}>6 Hours (Max)</option>
+            </select>
 
             {/* Dark Mode Toggle */}
             <button
@@ -413,15 +507,35 @@ function App() {
               </button>
             )}
 
-            <textarea
-              className="text-area-input"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Start typing or pasting your content here..."
-            />
+            <div
+              style={{
+                flexGrow: 1,
+                overflow: "auto",
+                position: "relative",
+              }}
+              className="editor-scroll-container"
+            >
+              <Editor
+                value={content}
+                onValueChange={(code) => setContent(code)}
+                highlight={(code) =>
+                  highlight(code, languages.javascript, "javascript")
+                } // Defaulting to JS, can be improved
+                padding={24}
+                placeholder="Start typing or pasting your content here..."
+                className="text-area-input"
+                style={{
+                  fontFamily: '"Fira code", "Fira Mono", monospace',
+                  fontSize: 14,
+                  minHeight: "100%",
+                  outline: "none",
+                  backgroundColor: "transparent",
+                }}
+              />
+            </div>
 
             {/* File Previews / Active Attachments */}
-            {(selectedFile || remoteFileUrl) && (
+            {(selectedFiles.length > 0 || remoteFileUrl) && (
               <div
                 style={{
                   padding: "0 24px 16px 24px",
@@ -430,9 +544,10 @@ function App() {
                   flexWrap: "wrap",
                 }}
               >
-                {/* Pending Upload */}
-                {selectedFile && (
+                {/* Pending Uploads */}
+                {selectedFiles.map((file, index) => (
                   <div
+                    key={index}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -445,15 +560,16 @@ function App() {
                     }}
                   >
                     <Paperclip size={14} color="var(--primary)" />
-                    <span style={{ fontWeight: 500 }}>{selectedFile.name}</span>
-                    <span style={{ color: "var(--text-muted)" }}>
-                      ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                    <span style={{ fontWeight: 500 }}>
+                      {file.name.length > 20
+                        ? file.name.substring(0, 20) + "..."
+                        : file.name}
                     </span>
                     <span style={{ color: "var(--text-muted)" }}>
-                      - Pending save
+                      ({(file.size / 1024 / 1024).toFixed(2)} MB)
                     </span>
                     <button
-                      onClick={handleRemoveFile}
+                      onClick={() => handleRemoveFile(index)}
                       style={{
                         background: "none",
                         border: "none",
@@ -465,10 +581,10 @@ function App() {
                       <X size={14} color="var(--danger)" />
                     </button>
                   </div>
-                )}
+                ))}
 
                 {/* Server Attachment */}
-                {remoteFileUrl && !selectedFile && (
+                {remoteFileUrl && selectedFiles.length === 0 && (
                   <a
                     href={remoteFileUrl}
                     target="_blank"
@@ -507,6 +623,7 @@ function App() {
               <div className="bottom-action-group">
                 <input
                   type="file"
+                  multiple
                   ref={fileInputRef}
                   onChange={handleFileChange}
                   style={{ display: "none" }}
@@ -643,6 +760,56 @@ function App() {
                 }}
                 autoFocus
               />
+              {recentRooms.length > 0 && (
+                <div style={{ marginBottom: "20px" }}>
+                  <p
+                    style={{
+                      fontSize: "0.85rem",
+                      color: "var(--text-muted)",
+                      marginBottom: "8px",
+                      marginTop: 0,
+                    }}
+                  >
+                    Recent Rooms
+                  </p>
+                  <div
+                    style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}
+                  >
+                    {recentRooms.map((code) => (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() => {
+                          setJoinCodeInput(code);
+                          // Optionally auto-submit: submitJoinRoom()
+                        }}
+                        style={{
+                          background: "var(--badge-bg)",
+                          border: "1px solid var(--border-color)",
+                          color: "var(--text-main)",
+                          padding: "6px 12px",
+                          borderRadius: "16px",
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          fontWeight: "500",
+                          transition: "all 0.2s",
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.borderColor = "var(--primary)";
+                          e.currentTarget.style.color = "var(--primary)";
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.borderColor =
+                            "var(--border-color)";
+                          e.currentTarget.style.color = "var(--text-main)";
+                        }}
+                      >
+                        {code}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 type="submit"
                 className="btn-primary"

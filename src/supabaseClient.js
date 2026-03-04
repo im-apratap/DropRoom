@@ -1,8 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 let supabaseUrl =
-  import.meta.env.VITE_SUPABASE_URL ||
-  "https://xxxxxxxxxxxxxxxxxxxx.supabase.co";
+  import.meta.env.VITE_SUPABASE_URL
 
 // If using proxy on Vercel, dynamically construct full URL if using a relative path like '/supabase'
 if (supabaseUrl.startsWith("/")) {
