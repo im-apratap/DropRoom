@@ -46,7 +46,7 @@ function App() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
 
-  const fetchRoomDataFromCode = async (cleanCode) => {
+  const fetchRoomDataFromCode = async (cleanCode, isInitialLoad = false) => {
     setIsFetching(true);
     try {
       const { data, error } = await supabase
@@ -57,7 +57,9 @@ function App() {
 
       if (error) {
         if (error.code === "PGRST116") {
-          alert("Room not found or is empty! Generating a new room...");
+          if (!isInitialLoad) {
+            alert("Room not found or is empty! Generating a new room...");
+          }
           setRoomCode(generateRandomCode());
         } else {
           throw error;
@@ -83,7 +85,7 @@ function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const roomFromUrl = urlParams.get("room");
     if (roomFromUrl && roomFromUrl.length === 6) {
-      fetchRoomDataFromCode(roomFromUrl.toUpperCase());
+      fetchRoomDataFromCode(roomFromUrl.toUpperCase(), true);
     } else {
       setRoomCode(generateRandomCode());
     }
@@ -118,7 +120,7 @@ function App() {
       return;
     }
     setShowJoinModal(false);
-    await fetchRoomDataFromCode(cleanCode);
+    await fetchRoomDataFromCode(cleanCode, false);
   };
 
   const handleNewRoom = () => {
