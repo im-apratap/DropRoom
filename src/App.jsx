@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { customAlphabet } from "nanoid";
 import { supabase } from "./supabaseClient";
 import {
   Clipboard as ClipIcon,
@@ -13,17 +14,14 @@ import {
   Download,
   Moon,
   Sun,
+  Link,
 } from "lucide-react";
 import "./index.css";
 
-function generateRandomCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let result = "";
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
+const generateRandomCode = customAlphabet(
+  "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+  6,
+);
 
 function App() {
   const [roomCode, setRoomCode] = useState("");
@@ -43,31 +41,12 @@ function App() {
   // Status state
   const [isSaving, setIsSaving] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
+  const [showJoinModal, setShowJoinModal] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState("");
 
-  useEffect(() => {
-    // Generate a new room code when the app loads
-    setRoomCode(generateRandomCode());
-  }, []);
-
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  }, [isDarkMode]);
-
-  const handleJoinRoom = async () => {
-    const code = window.prompt("Enter 6-digit room code:");
-    if (!code) return;
-
-    const cleanCode = code.trim().toUpperCase();
-    if (cleanCode.length !== 6) {
-      alert("Room code must be exactly 6 characters.");
-      return;
-    }
-
+  const fetchRoomDataFromCode = async (cleanCode) => {
     setIsFetching(true);
     try {
       const { data, error } = await supabase
@@ -78,7 +57,8 @@ function App() {
 
       if (error) {
         if (error.code === "PGRST116") {
-          alert("Room not found or is empty! Try another code.");
+          alert("Room not found or is empty! Generating a new room...");
+          setRoomCode(generateRandomCode());
         } else {
           throw error;
         }
@@ -93,9 +73,52 @@ function App() {
     } catch (error) {
       console.error("Error joining room:", error.message);
       alert("Error fetching room content.");
+      setRoomCode(generateRandomCode());
     } finally {
       setIsFetching(false);
     }
+  };
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomFromUrl = urlParams.get("room");
+    if (roomFromUrl && roomFromUrl.length === 6) {
+      fetchRoomDataFromCode(roomFromUrl.toUpperCase());
+    } else {
+      setRoomCode(generateRandomCode());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (roomCode) {
+      const newUrl = `${window.location.pathname}?room=${roomCode}`;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [roomCode]);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }, [isDarkMode]);
+
+  const openJoinModal = () => {
+    setJoinCodeInput("");
+    setShowJoinModal(true);
+  };
+
+  const submitJoinRoom = async (e) => {
+    if (e) e.preventDefault();
+    const cleanCode = joinCodeInput.trim().toUpperCase();
+    if (cleanCode.length !== 6) {
+      alert("Room code must be exactly 6 characters.");
+      return;
+    }
+    setShowJoinModal(false);
+    await fetchRoomDataFromCode(cleanCode);
   };
 
   const handleNewRoom = () => {
@@ -184,6 +207,13 @@ function App() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  const handleCopyLink = () => {
+    const link = window.location.href;
+    navigator.clipboard.writeText(link);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
   const handleCopyContent = () => {
     navigator.clipboard.writeText(content);
   };
@@ -244,15 +274,32 @@ function App() {
               >
                 {copiedCode ? <Check size={16} /> : <Copy size={16} />}
               </button>
+              <button
+                onClick={handleCopyLink}
+                title="Copy Room Link"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: copiedLink ? "var(--success)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "4px",
+                  transition: "color 0.2s",
+                  marginLeft: "4px",
+                }}
+              >
+                {copiedLink ? <Check size={16} /> : <Link size={16} />}
+              </button>
             </div>
 
             <button onClick={handleNewRoom} className="btn-secondary">
               <Plus size={16} />
-              New Paste
+              Create New Room
             </button>
 
             <button
-              onClick={handleJoinRoom}
+              onClick={openJoinModal}
               className="btn-secondary"
               disabled={isFetching}
             >
@@ -508,6 +555,116 @@ function App() {
           </span>
         </div>
       </main>
+
+      {/* Join Room Modal */}
+      {showJoinModal && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            className="modal-content animate-fade-in"
+            style={{
+              background: "var(--content-bg)",
+              padding: "24px",
+              borderRadius: "16px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+              border: "1px solid var(--border-color)",
+              color: "var(--text-main)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "1.25rem" }}>Join a Room</h3>
+              <button
+                onClick={() => setShowJoinModal(false)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-muted)",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                marginBottom: "20px",
+                fontSize: "0.95rem",
+              }}
+            >
+              Enter a 6-digit room code to join and collaborate.
+            </p>
+            <form onSubmit={submitJoinRoom}>
+              <input
+                type="text"
+                maxLength={6}
+                placeholder="e.g. A1B2C3"
+                value={joinCodeInput}
+                onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-main)",
+                  color: "var(--text-main)",
+                  fontSize: "1.25rem",
+                  letterSpacing: "2px",
+                  textAlign: "center",
+                  fontWeight: "bold",
+                  textTransform: "uppercase",
+                  marginBottom: "20px",
+                  boxSizing: "border-box",
+                }}
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="btn-primary"
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  justifyContent: "center",
+                }}
+                disabled={joinCodeInput.trim().length !== 6 || isFetching}
+              >
+                {isFetching ? (
+                  <Loader2
+                    size={16}
+                    className="spin"
+                    style={{ animation: "spin 1s linear infinite" }}
+                  />
+                ) : (
+                  "Join Now"
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {
