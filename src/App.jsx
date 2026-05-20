@@ -473,6 +473,7 @@ function App() {
               display: "flex",
               flexDirection: "column",
               position: "relative",
+              minHeight: 0,
             }}
           >
             {content && (
@@ -512,6 +513,7 @@ function App() {
                 flexGrow: 1,
                 overflow: "auto",
                 position: "relative",
+                minHeight: 0,
               }}
               className="editor-scroll-container"
             >
