@@ -33,6 +33,7 @@ const generateRandomCode = customAlphabet(
 );
 
 function App() {
+  const [roomId, setRoomId] = useState(null);
   const [roomCode, setRoomCode] = useState("");
   const [content, setContent] = useState("");
 
@@ -49,12 +50,16 @@ function App() {
 
   // Status state
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [expirationHours, setExpirationHours] = useState(1);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const hasUnsavedChangesRef = useRef(false);
+  const channelRef = useRef(null);
 
   // Recent rooms state
   const [recentRooms, setRecentRooms] = useState(() => {
@@ -80,7 +85,7 @@ function App() {
     try {
       const { data, error } = await supabase
         .from("snippets")
-        .select("content, file_url, file_name, expires_at")
+        .select("id, content, file_url, file_name, expires_at")
         .eq("code", cleanCode)
         .single();
 
@@ -109,6 +114,7 @@ function App() {
         }
       }
 
+      setRoomId(data.id);
       setRoomCode(cleanCode);
       setContent(data.content || "");
       setRemoteFileUrl(data.file_url || null);
@@ -142,6 +148,86 @@ function App() {
     }
   }, [roomCode]);
 
+  // Real-time synchronization
+  useEffect(() => {
+    if (!roomId) return;
+
+    const channel = supabase.channel(`room-${roomId}`, {
+      config: {
+        broadcast: { ack: false },
+      },
+    });
+
+    channelRef.current = channel;
+
+    channel
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "snippets",
+          filter: `id=eq.${roomId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setContent((currentContent) => {
+              if (payload.new.content !== currentContent) {
+                return payload.new.content || "";
+              }
+              return currentContent;
+            });
+            setRemoteFileUrl((currentUrl) => {
+              if (payload.new.file_url !== currentUrl) {
+                return payload.new.file_url || null;
+              }
+              return currentUrl;
+            });
+            setRemoteFileName((currentName) => {
+              if (payload.new.file_name !== currentName) {
+                return payload.new.file_name || null;
+              }
+              return currentName;
+            });
+          }
+        }
+      )
+      .on(
+        "broadcast",
+        { event: "snippet_updated" },
+        (payload) => {
+          if (payload.payload) {
+            setContent((currentContent) => {
+              if (payload.payload.content !== currentContent) {
+                return payload.payload.content || "";
+              }
+              return currentContent;
+            });
+            setRemoteFileUrl((currentUrl) => {
+              if (payload.payload.file_url !== currentUrl) {
+                return payload.payload.file_url || null;
+              }
+              return currentUrl;
+            });
+            setRemoteFileName((currentName) => {
+              if (payload.payload.file_name !== currentName) {
+                return payload.payload.file_name || null;
+              }
+              return currentName;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (channelRef.current === channel) {
+        channelRef.current = null;
+      }
+    };
+  }, [roomId]);
+
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add("dark");
@@ -167,6 +253,7 @@ function App() {
   };
 
   const handleNewRoom = () => {
+    setRoomId(null);
     setRoomCode(generateRandomCode());
     setContent("");
     setSelectedFiles([]);
@@ -198,8 +285,11 @@ function App() {
   };
 
   const handleSave = async () => {
+    if (isSavingRef.current) return;
     if (!content.trim() && selectedFiles.length === 0 && !remoteFileUrl) return;
 
+    isSavingRef.current = true;
+    hasUnsavedChangesRef.current = false;
     setIsSaving(true);
     try {
       let finalFileUrl = remoteFileUrl;
@@ -253,7 +343,7 @@ function App() {
       }
 
       // 2. Upsert the row in the database
-      const { error: dbError } = await supabase.from("snippets").upsert(
+      const { data: dbData, error: dbError } = await supabase.from("snippets").upsert(
         {
           code: roomCode,
           content: content,
@@ -262,16 +352,50 @@ function App() {
           expires_at: expiresAtValue,
         },
         { onConflict: "code" },
-      );
+      ).select("id").single();
 
       if (dbError) throw dbError;
+      if (dbData && dbData.id) {
+        setRoomId(dbData.id);
+      }
+
+      // Broadcast changes to other clients manually
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "snippet_updated",
+          payload: {
+            content: content,
+            file_url: finalFileUrl,
+            file_name: finalFileName,
+          },
+        });
+      }
     } catch (error) {
       console.error("Error saving content:", error.message);
       alert("Failed to save to room: " + error.message);
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
+      // If more changes happened while saving, trigger another save
+      if (hasUnsavedChangesRef.current && autoSaveEnabled) {
+        setTimeout(() => {
+          handleSave();
+        }, 1500);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!autoSaveEnabled || !hasUnsavedChangesRef.current) return;
+
+    const timer = setTimeout(() => {
+      handleSave();
+    }, 1500); // 1.5-second debounce for typing
+    
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, autoSaveEnabled]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomCode);
@@ -428,6 +552,30 @@ function App() {
               <option value={6}>6 Hours (Max)</option>
             </select>
 
+            <div style={{ display: "flex", alignItems: "center", marginLeft: "8px", gap: "6px" }}>
+              <input
+                type="checkbox"
+                id="autoSave"
+                checked={autoSaveEnabled}
+                onChange={(e) => setAutoSaveEnabled(e.target.checked)}
+                style={{ cursor: "pointer", width: "16px", height: "16px", accentColor: "var(--primary)" }}
+                title="Auto-Save"
+              />
+              <label
+                htmlFor="autoSave"
+                style={{
+                  fontSize: "0.875rem",
+                  color: "var(--text-main)",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                  userSelect: "none"
+                }}
+                title="Auto-Save"
+              >
+                Auto-Save
+              </label>
+            </div>
+
             {/* Dark Mode Toggle */}
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
@@ -519,7 +667,16 @@ function App() {
             >
               <Editor
                 value={content}
-                onValueChange={(code) => setContent(code)}
+                onValueChange={(code) => {
+                  if (code.length <= 500000) {
+                    setContent(code);
+                  } else {
+                    setContent(code.slice(0, 500000));
+                  }
+                  if (autoSaveEnabled) {
+                    hasUnsavedChangesRef.current = true;
+                  }
+                }}
                 highlight={(code) =>
                   highlight(code, languages.javascript, "javascript")
                 } // Defaulting to JS, can be improved
@@ -662,7 +819,7 @@ function App() {
                     fontWeight: "500",
                   }}
                 >
-                  {content.length}/100000 characters
+                  {content.length}/500000 characters
                 </span>
               </div>
             </div>
