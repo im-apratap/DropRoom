@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { customAlphabet } from "nanoid";
 import { supabase } from "./supabaseClient";
+import toast, { Toaster } from "react-hot-toast";
+import CryptoJS from "crypto-js";
 import {
   Clipboard as ClipIcon,
   Copy,
@@ -15,7 +17,13 @@ import {
   Moon,
   Sun,
   Link,
+  Lock,
+  Unlock,
+  Eye,
+  Settings,
+  QrCode,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import Editor from "react-simple-code-editor";
 import { highlight, languages } from "prismjs/components/prism-core";
 import "prismjs/components/prism-clike";
@@ -31,6 +39,19 @@ const generateRandomCode = customAlphabet(
   "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
   6,
 );
+
+const ANIMALS = ["Panda", "Fox", "Frog", "Owl", "Tiger", "Koala", "Penguin", "Wolf", "Bear", "Lion", "Rabbit", "Cat", "Dog"];
+const COLORS = ["#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16"];
+
+function generateIdentity() {
+  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+  const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+  return { 
+    id: Math.random().toString(36).substring(2, 9), 
+    name: `Anonymous ${animal}`, 
+    color 
+  };
+}
 
 function App() {
   const [roomId, setRoomId] = useState(null);
@@ -48,6 +69,24 @@ function App() {
   const [remoteFileName, setRemoteFileName] = useState(null); // This will represent the zipped file name
   const fileInputRef = useRef(null);
 
+  // E2E Encryption State
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [password, setPassword] = useState("");
+  const [isDecrypted, setIsDecrypted] = useState(true);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [encryptedData, setEncryptedData] = useState(null);
+  const [attemptPassword, setAttemptPassword] = useState("");
+  const [isReadOnly, setIsReadOnly] = useState(false);
+  const [readOnlyCode, setReadOnlyCode] = useState(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  const [identity] = useState(() => generateIdentity());
+  const [cursors, setCursors] = useState({});
+  const [presenceUsers, setPresenceUsers] = useState({});
+  const lastCursorSendRef = useRef(0);
+
+
   // Status state
   const [isSaving, setIsSaving] = useState(false);
   const isSavingRef = useRef(false);
@@ -60,6 +99,36 @@ function App() {
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const hasUnsavedChangesRef = useRef(false);
   const channelRef = useRef(null);
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!channelRef.current) return;
+      
+      const now = Date.now();
+      if (now - lastCursorSendRef.current > 50) { // ~20fps throttle
+        lastCursorSendRef.current = now;
+        
+        // Send broadcast only if channel is fully subscribed
+        // Supabase send() will fail silently or throw if not subscribed, but it's safe to call.
+        try {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'cursor',
+            payload: {
+              id: identity.id,
+              x: e.clientX,
+              y: e.clientY
+            }
+          });
+        } catch {
+          // Ignore errors if sending before fully subscribed
+        }
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [identity.id]);
 
   // Recent rooms state
   const [recentRooms, setRecentRooms] = useState(() => {
@@ -85,14 +154,14 @@ function App() {
     try {
       const { data, error } = await supabase
         .from("snippets")
-        .select("id, content, file_url, file_name, expires_at")
-        .eq("code", cleanCode)
+        .select("id, content, file_url, file_name, expires_at, is_private, read_only_code")
+        .or(`code.eq.${cleanCode},read_only_code.eq.${cleanCode}`)
         .single();
 
       if (error) {
         if (error.code === "PGRST116") {
           if (!isInitialLoad) {
-            alert("Room not found or is empty! Generating a new room...");
+            toast.error("Room not found or is empty! Generating a new room...");
           }
           setRoomCode(generateRandomCode());
         } else {
@@ -107,7 +176,7 @@ function App() {
         if (expiresAtDate < new Date()) {
           // Room expired
           if (!isInitialLoad) {
-            alert("This room has expired! Generating a new room...");
+            toast.error("This room has expired! Generating a new room...");
           }
           setRoomCode(generateRandomCode());
           return;
@@ -115,15 +184,32 @@ function App() {
       }
 
       setRoomId(data.id);
-      setRoomCode(cleanCode);
-      setContent(data.content || "");
-      setRemoteFileUrl(data.file_url || null);
-      setRemoteFileName(data.file_name || null);
+      
+      const isReadMode = (data.read_only_code === cleanCode && data.code !== cleanCode);
+      setIsReadOnly(isReadMode);
+      setRoomCode(cleanCode); // URL code (might be read-only or edit)
+      setReadOnlyCode(data.read_only_code);
+      setIsPrivate(data.is_private || false);
       setSelectedFiles([]); // Clear any pending local files
       addToRecentRooms(cleanCode);
+
+      if (data.is_private) {
+        setIsDecrypted(false);
+        setPasswordModalOpen(true);
+        setEncryptedData({
+          content: data.content || "",
+          file_url: data.file_url || null,
+          file_name: data.file_name || null
+        });
+      } else {
+        setIsDecrypted(true);
+        setContent(data.content || "");
+        setRemoteFileUrl(data.file_url || null);
+        setRemoteFileName(data.file_name || null);
+      }
     } catch (error) {
       console.error("Error joining room:", error.message);
-      alert("Error fetching room content.");
+      toast.error("Error fetching room content.");
       setRoomCode(generateRandomCode());
     } finally {
       setIsFetching(false);
@@ -155,6 +241,7 @@ function App() {
     const channel = supabase.channel(`room-${roomId}`, {
       config: {
         broadcast: { ack: false },
+        presence: { key: identity.id },
       },
     });
 
@@ -171,24 +258,46 @@ function App() {
         },
         (payload) => {
           if (payload.new) {
-            setContent((currentContent) => {
-              if (payload.new.content !== currentContent) {
-                return payload.new.content || "";
+            if (payload.new.is_private) {
+              setEncryptedData({
+                content: payload.new.content || "",
+                file_url: payload.new.file_url || null,
+                file_name: payload.new.file_name || null
+              });
+              if (password) {
+                 try {
+                   const decBytes = CryptoJS.AES.decrypt(payload.new.content || "", password);
+                   const decContent = decBytes.toString(CryptoJS.enc.Utf8);
+                   if (decContent !== undefined && decContent !== null) {
+                     setContent((current) => current !== decContent ? decContent : current);
+                   }
+                   if (payload.new.file_url) {
+                      setRemoteFileUrl(payload.new.file_url);
+                   }
+                 } catch (e) {
+                   console.error(e);
+                 }
               }
-              return currentContent;
-            });
-            setRemoteFileUrl((currentUrl) => {
-              if (payload.new.file_url !== currentUrl) {
-                return payload.new.file_url || null;
-              }
-              return currentUrl;
-            });
-            setRemoteFileName((currentName) => {
-              if (payload.new.file_name !== currentName) {
-                return payload.new.file_name || null;
-              }
-              return currentName;
-            });
+            } else {
+              setContent((currentContent) => {
+                if (payload.new.content !== currentContent) {
+                  return payload.new.content || "";
+                }
+                return currentContent;
+              });
+              setRemoteFileUrl((currentUrl) => {
+                if (payload.new.file_url !== currentUrl) {
+                  return payload.new.file_url || null;
+                }
+                return currentUrl;
+              });
+              setRemoteFileName((currentName) => {
+                if (payload.new.file_name !== currentName) {
+                  return payload.new.file_name || null;
+                }
+                return currentName;
+              });
+            }
           }
         }
       )
@@ -197,28 +306,70 @@ function App() {
         { event: "snippet_updated" },
         (payload) => {
           if (payload.payload) {
-            setContent((currentContent) => {
-              if (payload.payload.content !== currentContent) {
-                return payload.payload.content || "";
-              }
-              return currentContent;
-            });
-            setRemoteFileUrl((currentUrl) => {
-              if (payload.payload.file_url !== currentUrl) {
-                return payload.payload.file_url || null;
-              }
-              return currentUrl;
-            });
-            setRemoteFileName((currentName) => {
-              if (payload.payload.file_name !== currentName) {
-                return payload.payload.file_name || null;
-              }
-              return currentName;
-            });
+            if (isPrivate && password) {
+               try {
+                 const decBytes = CryptoJS.AES.decrypt(payload.payload.content || "", password);
+                 const decContent = decBytes.toString(CryptoJS.enc.Utf8);
+                 if (decContent || !(payload.payload.content)) setContent(decContent || "");
+               } catch(e) {
+                 console.error(e);
+               }
+            } else if (!isPrivate) {
+              setContent((currentContent) => {
+                if (payload.payload.content !== currentContent) {
+                  return payload.payload.content || "";
+                }
+                return currentContent;
+              });
+              setRemoteFileUrl((currentUrl) => {
+                if (payload.payload.file_url !== currentUrl) {
+                  return payload.payload.file_url || null;
+                }
+                return currentUrl;
+              });
+              setRemoteFileName((currentName) => {
+                if (payload.payload.file_name !== currentName) {
+                  return payload.payload.file_name || null;
+                }
+                return currentName;
+              });
+            }
           }
         }
       )
-      .subscribe();
+      .on('presence', { event: 'sync' }, () => {
+        const newState = channel.presenceState();
+        const users = {};
+        for (const id in newState) {
+           users[newState[id][0].id] = newState[id][0];
+        }
+        setPresenceUsers(users);
+        // Clean up cursors for users who left
+        setCursors(prev => {
+          const next = { ...prev };
+          for (const cid in next) {
+            if (!users[cid]) delete next[cid];
+          }
+          return next;
+        });
+      })
+      .on('broadcast', { event: 'cursor' }, (payload) => {
+        if (payload.payload.id !== identity.id) {
+          setCursors(prev => ({
+            ...prev,
+            [payload.payload.id]: {
+              x: payload.payload.x,
+              y: payload.payload.y,
+              // We rely on presence data for color and name when rendering
+            }
+          }));
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track(identity);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -226,6 +377,7 @@ function App() {
         channelRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
   useEffect(() => {
@@ -245,7 +397,7 @@ function App() {
     if (e) e.preventDefault();
     const cleanCode = joinCodeInput.trim().toUpperCase();
     if (cleanCode.length !== 6) {
-      alert("Room code must be exactly 6 characters.");
+      toast.error("Room code must be exactly 6 characters.");
       return;
     }
     setShowJoinModal(false);
@@ -260,6 +412,12 @@ function App() {
     setRemoteFileName(null);
     setRemoteFileUrl(null);
     setExpirationHours(1);
+    setIsPrivate(false);
+    setPassword("");
+    setIsDecrypted(true);
+    setPasswordModalOpen(false);
+    setIsReadOnly(false);
+    setReadOnlyCode(null);
   };
 
   const handleFileChange = (e) => {
@@ -269,7 +427,7 @@ function App() {
     // Validate 5MB combined limit for practical browser processing
     const totalSize = files.reduce((acc, file) => acc + file.size, 0);
     if (totalSize > 5 * 1024 * 1024) {
-      alert("Total files size is too large. Maximum combined size is 5MB.");
+      toast.error("Total files size is too large. Maximum combined size is 5MB.");
       e.target.value = ""; // Reset input
       return;
     }
@@ -284,10 +442,37 @@ function App() {
     }
   };
 
-  const handleSave = async () => {
+  const handleShareReadOnly = async () => {
+    if (!roomId) {
+      toast.error("Save the room first before sharing a read-only link.");
+      return;
+    }
+    
+    let currentReadOnlyCode = readOnlyCode;
+    if (!currentReadOnlyCode) {
+      // Generate and save a new read-only code
+      currentReadOnlyCode = generateRandomCode();
+      const { error } = await supabase.from("snippets").update({ read_only_code: currentReadOnlyCode }).eq("id", roomId);
+      if (error) {
+        toast.error("Failed to generate read-only link.");
+        return;
+      }
+      setReadOnlyCode(currentReadOnlyCode);
+    }
+    
+    const readOnlyUrl = `${window.location.origin}${window.location.pathname}?room=${currentReadOnlyCode}`;
+    navigator.clipboard.writeText(readOnlyUrl);
+    toast.success("Read-Only link copied to clipboard!");
+  };
+
+  const handleSave = async (overridePassword = null) => { // override is passed if saving immediately on lock
     if (isSavingRef.current) return;
     if (!content.trim() && selectedFiles.length === 0 && !remoteFileUrl) return;
-
+    const currentPassword = (typeof overridePassword === 'string') ? overridePassword : password;
+    if (isPrivate && !currentPassword) {
+      toast.error("Please enter a password to save this private room.");
+      return;
+    }
     isSavingRef.current = true;
     hasUnsavedChangesRef.current = false;
     setIsSaving(true);
@@ -303,20 +488,27 @@ function App() {
         });
 
         const zipBlob = await zip.generateAsync({ type: "blob" });
-        // NOTE: We could theoretically encrypt the entire zipBlob using crypto-js or WebCrypto here,
-        // but for a 5MB blob, reading into memory via FileReader to stringify, encrypt via CryptoJS,
-        // converting back to blob -> can easily block the UI or crash mobile browsers.
-        // Using native File is standard; but if strict client-side file encryption is requested, it requires more complex WebCrypto API streams.
-        // For right now, JSZip provides compression and bundles the files. If you'd like full blob encryption, let me know!
+        
+        let finalBlobToUpload = zipBlob;
+        
+        if (isPrivate && password) {
+           const base64data = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.readAsDataURL(zipBlob);
+              reader.onloadend = () => resolve(reader.result);
+           });
+           const encryptedBase64 = CryptoJS.AES.encrypt(base64data, currentPassword).toString();
+           finalBlobToUpload = new Blob([encryptedBase64], { type: "text/plain" });
+        }
 
-        const zipFileName = `files-${Date.now()}.zip`;
+        const zipFileName = isPrivate ? `files-${Date.now()}.enc` : `files-${Date.now()}.zip`;
         const filePath = `${roomCode}/${zipFileName}`;
 
         const { error: uploadError } = await supabase.storage
           .from("room-files")
-          .upload(filePath, zipBlob, {
+          .upload(filePath, finalBlobToUpload, {
             upsert: true,
-            contentType: "application/zip",
+            contentType: isPrivate ? "text/plain" : "application/zip",
           });
 
         if (uploadError) throw uploadError;
@@ -343,13 +535,19 @@ function App() {
       }
 
       // 2. Upsert the row in the database
+      let dbContent = content;
+      if (isPrivate && password) {
+        dbContent = CryptoJS.AES.encrypt(content, currentPassword).toString();
+      }
+
       const { data: dbData, error: dbError } = await supabase.from("snippets").upsert(
         {
           code: roomCode,
-          content: content,
+          content: dbContent,
           file_url: finalFileUrl,
           file_name: finalFileName,
           expires_at: expiresAtValue,
+          is_private: isPrivate,
         },
         { onConflict: "code" },
       ).select("id").single();
@@ -365,7 +563,7 @@ function App() {
           type: "broadcast",
           event: "snippet_updated",
           payload: {
-            content: content,
+            content: isPrivate ? CryptoJS.AES.encrypt(content, currentPassword).toString() : content,
             file_url: finalFileUrl,
             file_name: finalFileName,
           },
@@ -373,7 +571,7 @@ function App() {
       }
     } catch (error) {
       console.error("Error saving content:", error.message);
-      alert("Failed to save to room: " + error.message);
+      toast.error("Failed to save to room: " + error.message);
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
@@ -397,6 +595,35 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, autoSaveEnabled]);
 
+
+  const handleDecrypt = async (e) => {
+    e.preventDefault();
+    if (!attemptPassword) {
+      toast.error("Please enter a password.");
+      return;
+    }
+    try {
+      if (encryptedData.content) {
+        const decBytes = CryptoJS.AES.decrypt(encryptedData.content, attemptPassword);
+        const decContent = decBytes.toString(CryptoJS.enc.Utf8);
+        if (!decContent && encryptedData.content.length > 0) throw new Error("Wrong password");
+        setContent(decContent);
+      }
+      
+      setRemoteFileUrl(encryptedData.file_url);
+      setRemoteFileName(encryptedData.file_name);
+      
+      setPassword(attemptPassword);
+      setIsDecrypted(true);
+      setPasswordModalOpen(false);
+      toast.success("Room unlocked!");
+    } catch (e) {
+      console.error(e);
+      toast.error("Incorrect password.");
+      setAttemptPassword("");
+    }
+  };
+
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomCode);
     setCopiedCode(true);
@@ -410,12 +637,39 @@ function App() {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
+
+  const handleDownloadFile = async (e) => {
+    e.preventDefault();
+    if (!isPrivate) {
+      window.open(remoteFileUrl, "_blank");
+      return;
+    }
+    
+    const loadingToast = toast.loading("Decrypting file...");
+    try {
+      const response = await fetch(remoteFileUrl);
+      const encryptedBase64 = await response.text();
+      const decBytes = CryptoJS.AES.decrypt(encryptedBase64, password);
+      const decBase64 = decBytes.toString(CryptoJS.enc.Utf8);
+      
+      const a = document.createElement("a");
+      a.href = decBase64;
+      a.download = remoteFileName || "Shared Files.zip";
+      a.click();
+      toast.success("File decrypted!", { id: loadingToast });
+    } catch(err) {
+      console.error(err);
+      toast.error("Failed to decrypt file.", { id: loadingToast });
+    }
+  };
+
   const handleCopyContent = () => {
     navigator.clipboard.writeText(content);
   };
 
   return (
     <>
+      <Toaster position="bottom-center" />
       <main className="main-container animate-fade-in">
         <header className="header-container">
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -487,11 +741,32 @@ function App() {
               >
                 {copiedLink ? <Check size={16} /> : <Link size={16} />}
               </button>
+              <button
+                onClick={() => setShowQrModal(true)}
+                title="Show QR Code"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "4px",
+                  transition: "color 0.2s",
+                  marginLeft: "4px",
+                }}
+                onMouseOver={(e) => (e.currentTarget.style.color = "var(--text-main)")}
+                onMouseOut={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
+              >
+                <QrCode size={16} />
+              </button>
             </div>
+
+
 
             <button onClick={handleNewRoom} className="btn-secondary">
               <Plus size={16} />
-              Create New Room
+              New Room
             </button>
 
             <button
@@ -511,71 +786,31 @@ function App() {
               Join Room
             </button>
 
-            <button
-              onClick={handleSave}
-              className="btn-primary"
-              disabled={
-                isSaving || (!content.trim() && selectedFiles.length === 0)
-              }
-            >
-              {isSaving ? (
-                <Loader2
-                  size={16}
-                  className="spin"
-                  style={{ animation: "spin 1s linear infinite" }}
-                />
-              ) : (
-                <Save size={16} />
-              )}
-              Save
-            </button>
-
-            <select
-              value={expirationHours}
-              onChange={(e) => setExpirationHours(Number(e.target.value))}
-              style={{
-                marginLeft: "8px",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                border: "1px solid var(--border-color)",
-                background: "var(--bg-main)",
-                color: "var(--text-main)",
-                fontSize: "0.875rem",
-                cursor: "pointer",
-                outline: "none",
-              }}
-              title="Auto-Destruct Timer"
-            >
-              <option value={1}>1 Hour</option>
-              <option value={2}>2 Hours</option>
-              <option value={3}>3 Hours</option>
-              <option value={6}>6 Hours (Max)</option>
-            </select>
-
-            <div style={{ display: "flex", alignItems: "center", marginLeft: "8px", gap: "6px" }}>
-              <input
-                type="checkbox"
-                id="autoSave"
-                checked={autoSaveEnabled}
-                onChange={(e) => setAutoSaveEnabled(e.target.checked)}
-                style={{ cursor: "pointer", width: "16px", height: "16px", accentColor: "var(--primary)" }}
-                title="Auto-Save"
-              />
-              <label
-                htmlFor="autoSave"
-                style={{
-                  fontSize: "0.875rem",
-                  color: "var(--text-main)",
-                  cursor: "pointer",
-                  fontWeight: 500,
-                  userSelect: "none"
-                }}
-                title="Auto-Save"
+            {!isReadOnly && (
+              <button
+                onClick={handleSave}
+                className="btn-primary"
+                disabled={
+                  isSaving || (!content.trim() && selectedFiles.length === 0)
+                }
               >
-                Auto-Save
-              </label>
-            </div>
+                {isSaving ? (
+                  <Loader2
+                    size={16}
+                    className="spin"
+                    style={{ animation: "spin 1s linear infinite" }}
+                  />
+                ) : (
+                  <Save size={16} />
+                )}
+                Save
+              </button>
+            )}
 
+                        <button onClick={() => setShowSettingsModal(true)} className="btn-secondary" title="Settings">
+              <Settings size={16} />
+              More
+            </button>
             {/* Dark Mode Toggle */}
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
@@ -665,7 +900,16 @@ function App() {
               }}
               className="editor-scroll-container"
             >
+              {!isDecrypted ? (
+                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+                    <Lock size={48} style={{ marginBottom: '16px', color: 'var(--danger)' }} />
+                    <h2>This Room is Encrypted</h2>
+                    <p>Enter the password to view and edit.</p>
+                    <button onClick={() => setPasswordModalOpen(true)} className="btn-primary" style={{ marginTop: '16px' }}>Unlock Room</button>
+                 </div>
+              ) : (
               <Editor
+                disabled={isReadOnly}
                 value={content}
                 onValueChange={(code) => {
                   if (code.length <= 500000) {
@@ -691,6 +935,7 @@ function App() {
                   backgroundColor: "transparent",
                 }}
               />
+              )}
             </div>
 
             {/* File Previews / Active Attachments */}
@@ -745,9 +990,8 @@ function App() {
                 {/* Server Attachment */}
                 {remoteFileUrl && selectedFiles.length === 0 && (
                   <a
-                    href={remoteFileUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                    href="#"
+                    onClick={handleDownloadFile}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -778,6 +1022,7 @@ function App() {
             )}
 
             {/* Bottom Input Action Bar */}
+            {!isReadOnly && (
             <div className="bottom-action-bar">
               <div className="bottom-action-group">
                 <input
@@ -823,6 +1068,7 @@ function App() {
                 </span>
               </div>
             </div>
+            )}
           </div>
         </div>
         {/* Footer */}
@@ -833,6 +1079,303 @@ function App() {
           </span>
         </div>
       </main>
+
+            {/* Password Modal */}
+      {passwordModalOpen && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            className="modal-content animate-fade-in"
+            style={{
+              background: "var(--content-bg)",
+              padding: "24px",
+              borderRadius: "16px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+              border: "1px solid var(--border-color)",
+              color: "var(--text-main)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "1.25rem", display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Lock size={20} color="var(--danger)" /> Encrypted Room
+              </h3>
+            </div>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                marginBottom: "20px",
+                fontSize: "0.95rem",
+              }}
+            >
+              This room is End-to-End encrypted. Please enter the password to view its contents.
+            </p>
+            <form onSubmit={handleDecrypt}>
+              <input
+                type="password"
+                placeholder="Password"
+                value={attemptPassword}
+                onChange={(e) => setAttemptPassword(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--bg-main)",
+                  color: "var(--text-main)",
+                  fontSize: "1rem",
+                  marginBottom: "20px",
+                  boxSizing: "border-box",
+                  outline: "none"
+                }}
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="btn-primary"
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  justifyContent: "center",
+                }}
+              >
+                Unlock
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+                  {/* Settings Modal */}
+      {showSettingsModal && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div
+            className="modal-content animate-fade-in"
+            style={{
+              background: "var(--content-bg)",
+              padding: "24px",
+              borderRadius: "16px",
+              width: "90%",
+              maxWidth: "400px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+              border: "1px solid var(--border-color)",
+              color: "var(--text-main)",
+            }}
+          >
+             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+               <h3 style={{ margin: 0, fontSize: "1.25rem", display: 'flex', alignItems: 'center', gap: '8px' }}>
+                 <Settings size={20} /> Room Settings
+               </h3>
+               <button onClick={() => setShowSettingsModal(false)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-muted)" }}><X size={20} /></button>
+             </div>
+             
+             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+               {/* Share Read-Only */}
+               {!isReadOnly && (
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                   <span style={{ color: "var(--text-main)", fontSize: "0.95rem" }}>Read-Only Link</span>
+                   <button onClick={() => { handleShareReadOnly(); setShowSettingsModal(false); }} className="btn-secondary" style={{ padding: '6px 12px' }}>
+                     <Eye size={16} /> Share
+                   </button>
+                 </div>
+               )}
+
+               {/* Expiration Timer */}
+               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                 <span style={{ color: "var(--text-main)", fontSize: "0.95rem" }}>Auto-Destruct Timer</span>
+                 <select value={expirationHours} onChange={(e) => setExpirationHours(Number(e.target.value))} style={{ padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--border-color)", background: "var(--bg-main)", color: "var(--text-main)", fontSize: "0.875rem", outline: "none" }}>
+                   <option value={1}>1 Hour</option>
+                   <option value={2}>2 Hours</option>
+                   <option value={3}>3 Hours</option>
+                   <option value={6}>6 Hours (Max)</option>
+                 </select>
+               </div>
+
+               {/* Auto-Save */}
+               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                 <span style={{ color: "var(--text-main)", fontSize: "0.95rem" }}>Auto-Save</span>
+                 <input type="checkbox" checked={autoSaveEnabled} onChange={(e) => setAutoSaveEnabled(e.target.checked)} style={{ cursor: "pointer", width: "16px", height: "16px", accentColor: "var(--primary)" }} />
+               </div>
+
+               {/* Privacy */}
+               {!isReadOnly && (
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                   <span style={{ color: "var(--text-main)", fontSize: "0.95rem" }}>E2E Encryption</span>
+                   <button onClick={() => { 
+                     if (isPrivate) { setIsPrivate(false); setPassword(""); toast.success("Room Unlocked"); } 
+                     else { 
+                       setShowSettingsModal(false);
+                       toast.custom((t) => (
+                         <div style={{ background: 'var(--content-bg)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '250px' }}>
+                           <span style={{ fontWeight: 600, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                             <Lock size={16} color="var(--danger)" /> Set Room Password
+                           </span>
+                           <input 
+                             type="password" 
+                             id="toast-password" 
+                             placeholder="Secure Password..." 
+                             style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-main)', color: 'var(--text-main)', outline: 'none' }} 
+                             autoFocus 
+                             onKeyDown={(e) => {
+                               if (e.key === 'Enter') {
+                                 document.getElementById('toast-lock-btn').click();
+                               }
+                             }}
+                           />
+                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                             <button onClick={() => toast.dismiss(t.id)} className="btn-secondary" style={{ padding: '6px 12px' }}>Cancel</button>
+                             <button 
+                               id="toast-lock-btn"
+                               onClick={() => {
+                                 const pwd = document.getElementById('toast-password').value;
+                                 if (!pwd) { toast.error("Password required"); return; }
+                                 setPassword(pwd);
+                                 setIsPrivate(true);
+                                 toast.dismiss(t.id);
+                                 toast.success("Room is now E2E encrypted!");
+                                 handleSave(pwd);
+                               }} 
+                               className="btn-primary" 
+                               style={{ padding: '6px 12px' }}
+                             >
+                               Lock Room
+                             </button>
+                           </div>
+                         </div>
+                       ), { duration: Infinity });
+                     } 
+                   }} className={isPrivate ? "btn-secondary" : "btn-primary"} style={{ padding: '6px 12px', background: isPrivate ? "rgba(239, 68, 68, 0.1)" : "", color: isPrivate ? "var(--danger)" : "", borderColor: isPrivate ? "var(--danger)" : "" }}>
+                     {isPrivate ? <><Unlock size={16} /> Unlock</> : <><Lock size={16} /> Lock Room</>}
+                   </button>
+                 </div>
+               )}
+             </div>
+          </div>
+        </div>
+      )}
+
+      
+      {/* Live Multiplayer Cursors */}
+      {Object.keys(cursors).map(id => {
+         const cursor = cursors[id];
+         const user = presenceUsers[id];
+         if (!user) return null;
+         
+         return (
+           <div 
+             key={id} 
+             style={{
+               position: 'fixed',
+               left: cursor.x,
+               top: cursor.y,
+               pointerEvents: 'none',
+               zIndex: 9999,
+               transform: 'translate(-2px, -2px)',
+               transition: 'left 0.05s linear, top 0.05s linear',
+             }}
+           >
+             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+               <path d="M5.65376 21.2577C5.07185 21.6669 4.25 21.2505 4.25 20.5369V3.46313C4.25 2.7495 5.07185 2.33315 5.65376 2.74233L19.7891 12.6841C20.3013 13.0444 20.2644 13.8219 19.7208 14.1287L13.847 17.443C13.626 17.5678 13.4354 17.7441 13.2987 17.9542L9.89782 23.1873C9.53765 23.7416 8.68065 23.6888 8.39708 23.0954L6.91136 19.9859C6.73295 19.6125 6.42539 19.3093 6.0487 19.1332L5.65376 21.2577Z" fill={user.color} stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+             </svg>
+             <div style={{
+               background: user.color,
+               color: 'white',
+               padding: '2px 8px',
+               borderRadius: '12px',
+               borderTopLeftRadius: '0',
+               fontSize: '12px',
+               fontWeight: 600,
+               whiteSpace: 'nowrap',
+               boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+               marginTop: '4px',
+               marginLeft: '12px'
+             }}>
+               {user.name}
+             </div>
+           </div>
+         );
+      })}
+
+      {/* QR Code Modal */}
+      {showQrModal && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+          onClick={() => setShowQrModal(false)}
+        >
+          <div
+            className="modal-content animate-fade-in"
+            style={{
+              background: "var(--content-bg)",
+              padding: "32px",
+              borderRadius: "24px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+              border: "1px solid var(--border-color)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 24px 0", color: "var(--text-main)" }}>Scan to Join</h3>
+            <div style={{ background: "white", padding: "16px", borderRadius: "16px" }}>
+              <QRCodeSVG value={window.location.href} size={200} />
+            </div>
+            <p style={{ margin: "24px 0 0 0", color: "var(--text-muted)", letterSpacing: "2px", fontWeight: "bold" }}>
+              {roomCode}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Join Room Modal */}
       {showJoinModal && (

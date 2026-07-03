@@ -331,17 +331,21 @@ h6 {
 
 @media screen and (max-width: 480px) {
   .header-actions {
-    justify-content: center;
-    gap: 12px;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
   }
   .room-badge {
     width: 100%;
     justify-content: center;
     margin-right: 0 !important;
+    margin-bottom: 8px;
   }
   .btn-primary,
   .btn-secondary {
-    flex: 1;
-    justify-content: center;
+    flex: 1 1 calc(33% - 8px);
+    padding: 8px;
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
 }
