@@ -39,6 +39,7 @@ const generateRandomCode = customAlphabet(
   "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
   6,
 );
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 const ANIMALS = ["Panda", "Fox", "Frog", "Owl", "Tiger", "Koala", "Penguin", "Wolf", "Bear", "Lion", "Rabbit", "Cat", "Dog"];
 const COLORS = ["#ef4444", "#f97316", "#f59e0b", "#10b981", "#3b82f6", "#6366f1", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16"];
@@ -424,10 +425,12 @@ function App() {
     const files = Array.from(e.target.files);
     if (!files.length) return;
 
-    // Validate 5MB combined limit for practical browser processing
-    const totalSize = files.reduce((acc, file) => acc + file.size, 0);
-    if (totalSize > 5 * 1024 * 1024) {
-      toast.error("Total files size is too large. Maximum combined size is 5MB.");
+    const totalSize = [...selectedFiles, ...files].reduce(
+      (acc, file) => acc + file.size,
+      0,
+    );
+    if (totalSize > MAX_FILE_SIZE) {
+      toast.error("Total files size is too large. Maximum combined size is 50MB.");
       e.target.value = ""; // Reset input
       return;
     }
@@ -1053,7 +1056,7 @@ function App() {
                     (e.currentTarget.style.color = "var(--text-muted)")
                   }
                 >
-                  <Paperclip size={16} /> Attach File (Max 5MB)
+                  <Paperclip size={16} /> Attach File (Max 50MB)
                 </button>
               </div>
               <div className="bottom-action-group">

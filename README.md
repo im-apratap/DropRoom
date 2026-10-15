@@ -12,7 +12,7 @@ A sleek, minimalistic, and completely anonymous clipboard application built with
 
 - **Anonymous "Rooms"**: Instant generation of unique 6-character room codes. No signup required.
 - **Real-Time Text Syncing**: Paste code, links, or text and save them instantly to the cloud.
-- **File Attachments**: Upload and share files (up to 5MB) securely within your room.
+- **File Attachments**: Upload and share files (up to 50MB combined) securely within your room.
 - **1-Click Copy**: Easily copy your room code or the text content to your local clipboard.
 - **Premium UI**: Light-themed, glassmorphism-inspired design with a clean sidebar and functional action bar.
 
@@ -69,7 +69,7 @@ For file persistence:
 
 1. Go to **Storage** and create a bucket named `room-files`.
 2. Make it **Public**.
-3. Set the max file size to **5MB**.
+3. Set the max file size to **100MB**. Private file uploads are encrypted and can be larger than the original files.
 4. Create policies identical to above to allow anonymous `SELECT`, `INSERT`, and `UPDATE`.
 
 ---
